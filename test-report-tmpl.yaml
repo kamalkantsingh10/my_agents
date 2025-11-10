@@ -1,0 +1,435 @@
+# <!-- Powered by BMAD™ Core -->
+template:
+  id: test-report-template-v1
+  name: Test Report Generator
+  version: 1.0
+  output:
+    format: markdown
+    filename: qa/reports/test-report-{{timestamp}}.md
+    title: "Test Report - {{test_suite_name}}"
+
+workflow:
+  mode: interactive
+  elicitation: file-based-analysis
+
+input_configuration:
+  - id: test_files_location
+    title: Test Files Location
+    instruction: |
+      Ask the user to provide the directory path where test files, test results, or test artifacts are located.
+      Accept paths like:
+      - /path/to/test/results
+      - /path/to/test/files
+      - Relative paths from project root
+    validation: Directory must exist and be readable
+
+  - id: file_patterns
+    title: File Patterns to Analyze
+    instruction: |
+      Ask what types of files to analyze. Common patterns:
+      - Test results: **/*.xml, **/*.json, **/*.html
+      - Test files: **/*.test.js, **/*.spec.ts, **/*_test.py
+      - Coverage reports: coverage/**/*.json
+      - Screenshots/artifacts: **/screenshots/**/*
+    default: "**/*"
+
+  - id: analysis_scope
+    title: Analysis Scope
+    choices:
+      mode: [single-file, directory, recursive]
+    instruction: |
+      Determine the scope:
+      - single-file: Analyze one file at a time
+      - directory: All files in specified directory
+      - recursive: All files in directory and subdirectories
+
+sections:
+  - id: report-metadata
+    title: Report Metadata
+    instruction: |
+      Auto-populate based on file analysis:
+      - Test suite name (from directory or file names)
+      - Date range of test execution
+      - Total files analyzed
+      - Report generation timestamp
+    sections:
+      - id: overview
+        title: Test Execution Overview
+        type: metadata-block
+        fields:
+          - report_date: "{{iso_timestamp}}"
+          - test_suite: "{{test_suite_name}}"
+          - files_analyzed: "{{total_files}}"
+          - test_framework: "{{detected_framework}}"
+          - environment: "{{test_environment}}"
+
+  - id: file-discovery
+    title: File Discovery and Reading
+    instruction: |
+      CRITICAL: This section guides the iterative file reading process.
+
+      Steps:
+      1. List all files matching the pattern at the specified location
+      2. Display the list to user with file counts
+      3. Ask user to confirm before reading files
+      4. Read files ONE BY ONE (not all at once to avoid context overflow)
+      5. For each file, extract and analyze test data
+      6. Build report section by section
+
+      File reading strategy:
+      - Start with summary/index files first (if exist)
+      - Then process individual test result files
+      - Parse common formats: JUnit XML, Jest JSON, pytest output, etc.
+      - Extract key metrics from each file
+    output_format: |
+      ### Files Discovered
+
+      Total files found: {{file_count}}
+
+      | File Path | Type | Size | Last Modified |
+      |-----------|------|------|---------------|
+      {{file_listing}}
+
+  - id: test-results-summary
+    title: Test Results Summary
+    instruction: |
+      Aggregate data from all analyzed files to create summary statistics.
+      Parse and extract:
+      - Total tests executed
+      - Passed/Failed/Skipped counts
+      - Success rate percentage
+      - Total execution time
+      - Slowest tests
+    sections:
+      - id: metrics
+        title: Overall Metrics
+        type: statistics-table
+        template: |
+          | Metric | Value | Status |
+          |--------|-------|--------|
+          | Total Tests | {{total_tests}} | - |
+          | Passed | {{passed}} | ✓ |
+          | Failed | {{failed}} | ✗ |
+          | Skipped | {{skipped}} | ○ |
+          | Success Rate | {{success_rate}}% | {{status_indicator}} |
+          | Total Duration | {{total_duration}} | - |
+          | Average Test Time | {{avg_duration}} | - |
+
+  - id: file-by-file-analysis
+    title: File Analysis - {{file_name}}
+    repeatable: true
+    instruction: |
+      For EACH file read from the test location, create a dedicated analysis section.
+      This section repeats for every test file analyzed.
+
+      Process:
+      1. Read the file content
+      2. Identify the file type/format (XML, JSON, plain text, etc.)
+      3. Parse test results from the file
+      4. Extract test cases and their outcomes
+      5. Note any failures, errors, or warnings
+      6. Extract relevant metadata (timestamps, environment, etc.)
+
+      Create one section like this per file analyzed.
+    sections:
+      - id: file-info
+        title: File Information
+        template: |
+          - **File Path**: {{file_path}}
+          - **File Type**: {{file_type}}
+          - **Size**: {{file_size}}
+          - **Last Modified**: {{file_modified_date}}
+          - **Tests in File**: {{test_count}}
+
+      - id: test-cases
+        title: Test Cases in {{file_name}}
+        type: table
+        instruction: |
+          Extract and list all test cases found in this file.
+          For each test case capture:
+          - Test name/description
+          - Status (PASS/FAIL/SKIP)
+          - Duration
+          - Error message (if failed)
+        template: |
+          | Test Case | Status | Duration | Details |
+          |-----------|--------|----------|---------|
+          {{test_case_rows}}
+
+      - id: failures-in-file
+        title: Failures and Errors
+        condition: file has failures or errors
+        instruction: |
+          If this file contains any failed tests or errors:
+          - List each failure with full error message
+          - Include stack traces if available
+          - Note file and line numbers
+          - Include screenshots or artifacts if referenced
+        type: detailed-list
+        template: |
+          #### {{test_case_name}}
+
+          **Status**: FAILED
+          **Error Type**: {{error_type}}
+          **Error Message**:
+          ```
+          {{error_message}}
+          ```
+
+          **Stack Trace**:
+          ```
+          {{stack_trace}}
+          ```
+
+          **Artifacts**: {{artifact_links}}
+
+  - id: failure-summary
+    title: All Failures Summary
+    condition: any test failures exist
+    instruction: |
+      Aggregate all failures from all files into a consolidated view.
+      Group by:
+      - Error type/category
+      - Affected test files
+      - Common patterns in failures
+    sections:
+      - id: failure-categories
+        title: Failure Categories
+        type: grouped-list
+        instruction: Group similar failures together
+
+      - id: critical-failures
+        title: Critical Failures
+        instruction: Highlight high-priority or blocking failures
+        priority: high
+
+      - id: failure-patterns
+        title: Failure Patterns Detected
+        instruction: |
+          Analyze failures to identify:
+          - Repeated error messages
+          - Common failure points
+          - Environmental issues
+          - Flaky test indicators
+
+  - id: coverage-analysis
+    title: Test Coverage Analysis
+    condition: coverage data available
+    instruction: |
+      If coverage files are found (e.g., coverage/coverage-final.json):
+      - Read coverage data
+      - Extract line, branch, function coverage percentages
+      - Identify uncovered areas
+      - List files with low coverage
+    sections:
+      - id: coverage-summary
+        title: Coverage Summary
+        template: |
+          | Coverage Type | Percentage | Status |
+          |---------------|------------|--------|
+          | Line Coverage | {{line_coverage}}% | {{line_status}} |
+          | Branch Coverage | {{branch_coverage}}% | {{branch_status}} |
+          | Function Coverage | {{function_coverage}}% | {{function_status}} |
+          | Statement Coverage | {{statement_coverage}}% | {{statement_status}} |
+
+      - id: uncovered-files
+        title: Files Needing Coverage
+        instruction: List files with coverage below threshold (e.g., <80%)
+
+  - id: performance-analysis
+    title: Performance Analysis
+    instruction: |
+      Analyze test execution performance:
+      - Identify slowest test files
+      - Find slow individual tests
+      - Calculate average execution time
+      - Detect performance regressions (if historical data available)
+    sections:
+      - id: slow-tests
+        title: Slowest Tests
+        type: ranked-table
+        template: |
+          | Rank | Test Name | Duration | File |
+          |------|-----------|----------|------|
+          {{slow_test_rows}}
+
+      - id: performance-hotspots
+        title: Performance Hotspots
+        instruction: Identify test files or suites consuming most execution time
+
+  - id: trends-comparison
+    title: Trends and Comparisons
+    condition: multiple test runs or historical data
+    instruction: |
+      If analyzing multiple test result files or comparing with previous runs:
+      - Show trend over time (improving/degrading)
+      - Compare pass rates
+      - Identify new failures vs known failures
+      - Track flaky tests
+    sections:
+      - id: historical-comparison
+        title: Comparison with Previous Run
+        template: |
+          | Metric | Current | Previous | Change |
+          |--------|---------|----------|--------|
+          | Pass Rate | {{current_pass_rate}}% | {{previous_pass_rate}}% | {{change_indicator}} |
+          | Total Tests | {{current_total}} | {{previous_total}} | {{test_count_change}} |
+          | Duration | {{current_duration}} | {{previous_duration}} | {{duration_change}} |
+
+      - id: flaky-tests
+        title: Flaky Test Detection
+        instruction: Identify tests with inconsistent results across runs
+
+  - id: artifact-references
+    title: Test Artifacts
+    instruction: |
+      If test artifacts are found (screenshots, videos, logs):
+      - List all artifacts
+      - Link to their locations
+      - Associate with specific test failures
+      - Include thumbnails for images if possible
+    sections:
+      - id: screenshots
+        title: Failure Screenshots
+        type: artifact-gallery
+        instruction: Link screenshots to failed test cases
+
+      - id: logs
+        title: Test Execution Logs
+        instruction: Reference log files and their locations
+
+  - id: recommendations
+    title: Recommendations and Next Steps
+    instruction: |
+      Based on the analysis, provide actionable recommendations:
+      - Tests that need immediate attention
+      - Suggested fixes for common failures
+      - Coverage improvement suggestions
+      - Performance optimization opportunities
+      - Process improvements
+    sections:
+      - id: immediate-actions
+        title: Immediate Actions Required
+        type: prioritized-list
+        priority: critical
+
+      - id: improvements
+        title: Suggested Improvements
+        type: bullet-list
+
+      - id: follow-up
+        title: Follow-up Items
+        instruction: Create actionable items for the team
+
+  - id: appendix
+    title: Appendix
+    instruction: |
+      Include supplementary information:
+      - Full file paths analyzed
+      - Test framework configuration details
+      - Environment variables
+      - Tool versions
+    sections:
+      - id: file-manifest
+        title: Complete File Manifest
+        instruction: Full list of all files processed
+
+      - id: environment-info
+        title: Environment Information
+        instruction: Capture test environment details
+
+      - id: raw-data
+        title: Raw Data References
+        instruction: Links to raw test result files for detailed investigation
+
+processing_instructions:
+  file_reading:
+    strategy: iterative
+    instruction: |
+      CRITICAL WORKFLOW for reading files:
+
+      1. **Discovery Phase**:
+         - Use directory listing to find all matching files
+         - Present file count and list to user
+         - Get confirmation to proceed
+
+      2. **Sequential Processing**:
+         - Read files ONE AT A TIME
+         - Do not attempt to read all files at once
+         - Process file content immediately after reading
+         - Extract relevant data into report structure
+         - Clear/summarize before moving to next file
+
+      3. **Data Extraction**:
+         - Parse file format (XML, JSON, text)
+         - Extract test results, metrics, errors
+         - Normalize data into common format
+         - Aggregate for summary sections
+
+      4. **Report Building**:
+         - Build report incrementally
+         - Add file analysis sections as files are processed
+         - Update summary statistics with each file
+         - Maintain running totals
+
+      5. **Completion**:
+         - Finalize all summary sections
+         - Generate recommendations
+         - Output complete report
+
+  format_parsers:
+    junit_xml:
+      description: Parse JUnit XML test result files
+      extract: [testsuites, testsuite, testcase, failure, error, skipped, system-out, system-err]
+
+    jest_json:
+      description: Parse Jest JSON test results
+      extract: [numTotalTests, numPassedTests, numFailedTests, testResults, assertionResults]
+
+    pytest_output:
+      description: Parse pytest output and reports
+      extract: [test sessions, passed, failed, errors, warnings, duration]
+
+    coverage_json:
+      description: Parse coverage reports (Istanbul, NYC)
+      extract: [total, lines, statements, functions, branches]
+
+examples:
+  basic_usage: |
+    User: "Read test results from /path/to/test-results and generate a report"
+
+    Assistant:
+    1. Lists all files in /path/to/test-results
+    2. Shows count: "Found 15 test result files"
+    3. Asks: "I found 15 XML files. Should I analyze all of them?"
+    4. User confirms
+    5. Reads first file: result-1.xml
+    6. Parses JUnit XML format
+    7. Extracts tests, failures, duration
+    8. Adds to report under "File Analysis - result-1.xml"
+    9. Updates running totals
+    10. Moves to second file: result-2.xml
+    11. Repeats until all files processed
+    12. Generates final summary and recommendations
+    13. Outputs complete markdown report
+
+  coverage_analysis: |
+    User: "Analyze coverage from coverage/coverage-final.json"
+
+    Assistant:
+    1. Reads coverage-final.json
+    2. Parses JSON structure
+    3. Extracts coverage percentages
+    4. Identifies files with low coverage
+    5. Generates coverage summary section
+    6. Provides recommendations for improving coverage
+
+  multi_format: |
+    User: "Analyze test results - I have both JUnit XML and Jest JSON"
+
+    Assistant:
+    1. Asks for directory paths for each format
+    2. Processes JUnit XML files first
+    3. Then processes Jest JSON files
+    4. Normalizes data from both formats
+    5. Creates unified report with combined metrics
